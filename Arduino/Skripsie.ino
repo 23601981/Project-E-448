@@ -5,10 +5,12 @@
 #define PI 3.1415926535897932384626433832795
 
 boolean button_flag = false;   // Push button interrupt flag
-int row = 0;;           //Keypad row
-int column = 0;         //Keypad column
+int button_pressed = 0; 
+unsigned long button_pressed_time = 0;
+int row = 0;;           // Keypad row
+int column = 0;         // Keypad column
 char key;               // Keypad variable
-char key_mem[5];        //Keypad array
+char key_mem[5];        // Keypad array
 
 boolean already_print = false;  
 boolean system_stopped = true;
@@ -48,28 +50,29 @@ float finish_minute;
 float tracking_type; // NS: tracking_type = 1;  EW: tracking_type = 2
 
  
-int n;       //Day number of the year
-int tracker_positions; //Amount of daily positions of the tracker
-float tilt_angles[96]; //Tilt angles of collector
-float H[96];  //Hour angle of the sun
-float H_Finish; //Daily Start hour angle
-float H_Start;  //Daily Finish hour angle
-int current_position = -1; //Current position of the tracker
-float tilt_limit = 70;
+int n;       // Day number of the year
+int tracker_positions; // Amount of daily positions of the tracker
+float tilt_angles[96]; // Tilt angles of collector
+float H[96];  // Hour angle of the sun
+float H_Finish; // Daily Start hour angle
+float H_Start;  // Daily Finish hour angle
+int current_position = -1; // Current position of the tracker
+float tilt_limit = 67;     // To give a safety margin, the tilt limit is set to 67 degrees and not 70 degrees. 70 degrees is the absolute mechanical limit.  
+int stop_check = 0;
 
 float PV_voltage;
 float PV_current;
 float PV_power;
 float battery_voltage;
 float measured_tilt;
-float half_deadband = 3;
+float half_deadband = 1; // Controller deadband = 2 degrees
 
-char Get_Key();
-void set_Position(int pos, float h, float m);
-void actuator_return();
+char Get_Key(); // Get LCD character
+void set_Position(int pos, float h, float m); // Set actuator position
+void actuator_return();                    // Return actuator to "SYSTEM STOPPED" position
 
-PwmOut pwm1(D3);
-PwmOut pwm2(D5);
+PwmOut pwm1(D3);  // PWM for DC-DC converter
+PwmOut pwm2(D5);  // PWM for MD13S DC motor driver
 
 LiquidCrystal_I2C lcd(0x27, 16, 2); // Initialize LCD Object 
 
@@ -85,9 +88,9 @@ pinMode(D10, OUTPUT);      // Keypad row 3
 pinMode(D9, OUTPUT);       // Keypad row 4
 pinMode(D2, INPUT_PULLUP); // Push button
 
-pinMode(D4, OUTPUT);       //MD13S DIR pin
+pinMode(D4, OUTPUT);       // MD13S DIR pin
 
-attachInterrupt(digitalPinToInterrupt(D2), blink, FALLING);
+attachInterrupt(digitalPinToInterrupt(D2), blink, FALLING); // Push-button interrupt
 
 digitalWrite(D12, LOW);
 digitalWrite(D11, LOW);
@@ -95,7 +98,7 @@ digitalWrite(D10, LOW);
 digitalWrite(D9, LOW);
 digitalWrite(D4, LOW);
 
-lcd.init();  //LCD setup
+lcd.init();  // LCD setup
 lcd.clear();
 lcd.backlight();
 lcd.blink();
@@ -109,8 +112,8 @@ if (!RTC.setPeriodicCallback(rtc_interrupt, Period::N4_TIMES_EVERY_SEC)) {
     Serial.println("ERROR: periodic callback not set");
 }
 
-pwm1.begin(50,0.0);
-pwm2.begin(1000, 0.0);
+pwm1.begin(50,0.0); // Set frequency to 20 kHz
+pwm2.begin(1000, 0.0);  // Set frequency to 1kHz
 pwm1.pulse_perc(0);
 pwm2.pulse_perc(0);
   
@@ -118,7 +121,17 @@ pwm2.pulse_perc(0);
 }
   
 void loop(){
-  while(button_flag == true){ // Go and stay in keypad enter mode
+  button_pressed = digitalRead(D2); // Check a push-button press for de-bouncing purposes
+  if(button_pressed == 0){ 
+    button_pressed_time = millis();
+  }
+  
+ while(button_flag == true){ // Go and stay in keypad enter mode
+  button_pressed = digitalRead(D2); // Check a button press for de-bouncing purposes
+  if(button_pressed == 0){ 
+    button_pressed_time = millis();
+  }
+  
   if(digitalRead(D8) == LOW || digitalRead(D7) == LOW || digitalRead(D6) == LOW){  //If a new key is pressed
      Get_Key();  //Get the key that is pressed
      delay(250); //Wait for quarter of a second
@@ -127,144 +140,153 @@ void loop(){
         digit_position = 1;   //One digit has been entered
         key_mem[0] = key;
      } 
-     else  if(digit_position == 1){ //If 1 digit has already been entered
+     else  if(digit_position == 1){ // If 1 digit has already been entered
         if(menu_state == 1 || menu_state == 0 || menu_state == 4 || menu_state == 6 || menu_state == 7 || menu_state == 8 || menu_state == 9){ //If in longitude or latitude "enter value" mode
-        digit_position = 2;       //Two digits have been entered
+        digit_position = 2;       // Two digits have been entered
         key_mem[1] = key;
         }
         else if(menu_state == 10 && key == '*'){ 
-          digit_position = 0;  //Zero digits have been entered
+          digit_position = 0;  // Zero digits have been entered
           if(key_mem[0] == '1'){ 
             menu_state = 0;
           }
           if(key_mem[0] == '2'){ 
             lcd.clear();
             lcd.setCursor(0, 0);
-            lcd.print("SYSTEM STOPPED");
+            lcd.print("Changing...");
             system_stopped = true;
             button_flag = false;
             actuator_return();
+            lcd.clear();
+            lcd.setCursor(0, 0);
+            lcd.print("SYSTEM STOPPED");
             menu_state = 12;
          }
         }
         else if(menu_state == 10){ 
-          digit_position = 2;     //Two digits have been entered
+          digit_position = 2;     // Two digits have been entered
           key_mem[1] = key;
         }
-        else if(menu_state == 2 && key == '*'){ //If in latitude "enter direction" mode and enter button is pressed
-          digit_position = 0;  //Zero digits have been entered
+        else if(menu_state == 2 && key == '*'){ // If in latitude "enter direction" mode and enter button is pressed
+          digit_position = 0;  // Zero digits have been entered
           menu_state = 1;
           if(key_mem[0] == '1'){ 
-            Serial.print("Latitude:");
+            Serial.print("Latitude: ");
             Serial.println(temp_latitude);
           }
          if(key_mem[0] == '2'){ 
             temp_latitude = -temp_latitude;
-            Serial.print("Latitude:");
+            Serial.print("Latitude: ");
             Serial.println(temp_latitude);
          }
         }
-        else if(menu_state == 2){ //If in latitude "enter direction mode" and another button is pressed
-          digit_position = 2;     //Two digits have been entered
+        else if(menu_state == 2){ // If in latitude "enter direction mode" and another button is pressed
+          digit_position = 2;     // 2 digits have been entered
           key_mem[1] = key;
         }
         else if(menu_state == 3 && key == '*'){ //If in longitude "enter direction" mode and enter button is pressed
-          digit_position = 0;  //Zero digits have been entered
+          digit_position = 0;  // 0 digits have been entered
           menu_state = 4;
           if(key_mem[0] == '1'){ 
-            Serial.print("Longitude:");
+            Serial.print("Longitude: ");
             Serial.println(temp_longitude);
           }
          if(key_mem[0] == '2'){ 
             temp_longitude = -temp_longitude;
-            Serial.print("Longitude:");
+            Serial.print("Longitude: ");
             Serial.println(temp_longitude);
          }
         }
         else if(menu_state == 3){ //If in longitude "enter direction mode" and another button is pressed
-          digit_position = 2;     //Two digits have been entered
+          digit_position = 2;     // 2 digits have been entered
           key_mem[1] = key;
         }
         else if(menu_state == 5 && key == '*'){ //If in LTM "enter direction" mode and enter button is pressed
-          digit_position = 0;  //Zero digits have been entered
+          digit_position = 0;  // 0 digits have been entered
           menu_state = 6;
           if(key_mem[0] == '1'){ 
-            Serial.print("LTM:");
+            Serial.print("LTM: ");
             Serial.println(temp_ltm);
           }
          if(key_mem[0] == '2'){ 
             temp_ltm = -temp_ltm;
-            Serial.print("LTM:");
+            Serial.print("LTM: ");
             Serial.println(temp_ltm);
          }
         }
-        else if(menu_state == 5){ //If in LTM "enter direction mode" and another button is pressed
-          digit_position = 2;     //Two digits have been entered
+        else if(menu_state == 5){ // If in LTM "enter direction mode" and another button is pressed
+          digit_position = 2;     // 2 digits have been entered
           key_mem[1] = key;
         }
         else if(menu_state == 11 && key == '*'){ 
-          digit_position = 0;  //Zero digits have been entered
+          digit_position = 0;  // 0 digits have been entered
           menu_state = 12;
           button_flag = false;
           value_update = true;
           lcd.clear();
           if(key_mem[0] == '1'){ 
-           temp_tracking_type = 1; //North-South tracking
+           temp_tracking_type = 1; // North-South tracking
            Serial.println("North-South tracking");
           }
          if(key_mem[0] == '2'){ 
-           temp_tracking_type = 2;  //East-West tracking
+           temp_tracking_type = 2;  // East-West tracking
            Serial.println("East-West tracking");
          }
         }
         else if(menu_state == 11){
-          digit_position = 2;     //Two digits have been entered
+          digit_position = 2;     // 2 digits have been entered
           key_mem[1] = key;
         }
      } 
-     else if(digit_position == 2){ //If 2 digits have already been entered
-        digit_position = 3;         //Three digits have been entered  
+     else if(digit_position == 2){ // If 2 digits have already been entered
+        digit_position = 3;         // Three digits have been entered  
         key_mem[2] = key;
      } 
-     else  if(digit_position == 3){ //If 3 digits have already been entered
-        digit_position = 4;         //Four digits have been entered
+     else  if(digit_position == 3){ // If 3 digits have already been entered
+        digit_position = 4;         // 4 digits have been entered
         key_mem[3] = key;
      }
-     else if(digit_position == 4){ //If 4 digits have already been entered
-      if(key == '*' && menu_state == 0){ //If enter button is pressed and in latitude "enter value" mode
+     else if(digit_position == 4){ // If 4 digits have already been entered
+      if(key == '*' && menu_state == 0){ // If enter button is pressed and in latitude "enter value" mode
         menu_state = 2;
-        digit_position = 0;        //Zero digits have been entered
+        digit_position = 0;        // 0 digits have been entered
         temp_latitude = (key_mem[0] - 48) * 10 + (key_mem[1] -48) + (key_mem[2] - 48) * 0.1 + (key_mem[3] - 48) * 0.01;
         if(temp_latitude > 90){ 
           menu_state = 0;
         }
       }
-       else if(menu_state == 0){ //If another button is pressed and in latitude "enter value" mode
-         digit_position = 5;     //
+       else if(menu_state == 0){ // If another button is pressed and in latitude "enter value" mode
+         digit_position = 5;     // 5 digits have been entered 
        }
        else if(menu_state == 1 || menu_state == 4){ 
-          digit_position = 5;  //Five digits have been entered
+          digit_position = 5;  // 5 digits have been entered
           key_mem[4] = key;
        }
-       else if(key == '*' && menu_state == 6){ //If enter button is pressed and in time "enter" mode
+       else if(key == '*' && menu_state == 6){ // If enter button is pressed and in time "enter" mode
         menu_state = 7;
-        digit_position = 0;        //Zero digits have been entered
+        digit_position = 0;        // 0 digits have been entered
         temp_hour = (key_mem[0] - 48) * 10 + (key_mem[1] - 48);
         temp_minute = (key_mem[2] - 48) * 10 + (key_mem[3] - 48);
         if(temp_hour > 23 || temp_minute > 59){ 
           menu_state = 6;
         }
-        Serial.print("Hour:");
-        Serial.println(temp_hour);
-        Serial.print("Minute:");
+       Serial.print("Time: "); 
+       if(temp_hour < 10){ 
+        Serial.print("0");
+       }
+        Serial.print(temp_hour);
+        Serial.print(":");
+       if(temp_minute < 10){ 
+        Serial.print("0");
+       }
         Serial.println(temp_minute);
       }
-       else if(menu_state == 6){ //If another button is pressed and in time "enter" mode
-         digit_position = 5;     //
+       else if(menu_state == 6){ // If another button is pressed and in time "enter" mode
+         digit_position = 5;     // 5 digits have been entered
        }
-       else if(key == '*' && menu_state == 7){ //If enter button is pressed and in date "enter" mode
+       else if(key == '*' && menu_state == 7){ // If enter button is pressed and in date "enter" mode
         menu_state = 8;
-        digit_position = 0;        //Zero digits have been entered
+        digit_position = 0;        // 0 digits have been entered
         temp_day = (key_mem[0] - 48) * 10 + (key_mem[1] - 48);
         temp_month = (key_mem[2] - 48) * 10 + (key_mem[3] - 48);
         
@@ -280,51 +302,68 @@ void loop(){
         else if(temp_month > 12 || temp_month == 0 || temp_day == 0){ 
           menu_state = 7;
         }
-        Serial.print("Day:");
-        Serial.println(temp_day);
-        Serial.print("Month:");
+        Serial.print("Date: ");
+        if(temp_day < 10){ 
+          Serial.print("0");
+        }
+        Serial.print(temp_day);
+        Serial.print("/");
+        if(temp_month < 10){ 
+          Serial.print("0");
+        }
         Serial.println(temp_month);
       }
-       else if(menu_state == 7){ //If another button is pressed and in date "enter" mode
-         digit_position = 5;     //
+       else if(menu_state == 7){ // If another button is pressed and in date "enter" mode
+         digit_position = 5;     // 5 digits have been entered
        }
-       else if(key == '*' && menu_state == 8){ //If enter button is pressed and in Start Time "enter" mode
+       else if(key == '*' && menu_state == 8){ // If enter button is pressed and in Start Time "enter" mode
         menu_state = 9;
-        digit_position = 0;        //Zero digits have been entered
+        digit_position = 0;        // 0 digits have been entered
         temp_start_hour = (key_mem[0] - 48) * 10 + (key_mem[1] - 48);
         temp_start_minute = (key_mem[2] - 48) * 10 + (key_mem[3] - 48);
         
         if(temp_start_hour > 23 || temp_start_minute > 59){ 
           menu_state = 8;
         }
-        
-        Serial.print("Start Hour:");
-        Serial.println(temp_start_hour);
-        Serial.print("Start Minute:");
+        Serial.print("Start Time: "); 
+        if(temp_start_hour < 10){ 
+          Serial.print("0");
+        }
+        Serial.print(temp_start_hour);
+        Serial.print(":");
+        if(temp_start_minute < 10){ 
+          Serial.print("0");
+        }
         Serial.println(temp_start_minute);
       }
-      else if(menu_state == 8){ //If another button is pressed and in Start Time "enter" mode
-        digit_position = 5;     //
+      else if(menu_state == 8){ // If another button is pressed and in Start Time "enter" mode
+        digit_position = 5;     // 5 digits have been entered
       }
-     else if(key == '*' && menu_state == 9){ //If enter button is pressed and in Finish Time "enter" mode
+      else if(key == '*' && menu_state == 9){ //If enter button is pressed and in Finish Time "enter" mode
         menu_state = 11;
-        digit_position = 0;        //Zero digits have been entered
+        digit_position = 0;        // 0 digits have been entered
         temp_finish_hour = (key_mem[0] - 48) * 10 + (key_mem[1] - 48);
         temp_finish_minute = (key_mem[2] - 48) * 10 + (key_mem[3] - 48);
         
         if(temp_finish_hour > 23 || temp_finish_minute > 59 || temp_finish_hour <= temp_start_hour || ((temp_finish_hour - temp_start_hour == 1) && temp_finish_minute < temp_start_minute)){ 
           menu_state = 9;
         }
-        Serial.print("Finish Hour:");
-        Serial.println(temp_finish_hour);
-        Serial.print("Finish Minute:");
+        Serial.print("Finish Time: "); 
+        if(temp_finish_hour < 10){ 
+          Serial.print("0");
+        }
+        Serial.print(temp_finish_hour);
+        Serial.print(":");
+        if(temp_finish_minute < 10){ 
+          Serial.print("0");
+        }
         Serial.println(temp_finish_minute);
       }
-       else if(menu_state == 9){ //If another button is pressed and in Finish Time "enter" mode
-         digit_position = 5;     //
+       else if(menu_state == 9){ // If another button is pressed and in Finish Time "enter" mode
+         digit_position = 5;     // 5 digits have been entered
        }
      }
-      else if(digit_position == 5){ //If 5 digits have already been entered
+      else if(digit_position == 5){ // If 5 digits have already been entered
         if(key == '*' && menu_state == 1){ 
           menu_state = 3;
           digit_position = 0;
@@ -334,36 +373,36 @@ void loop(){
           }
         }
         else if(menu_state == 1){ 
-          digit_position = 6; 
+          digit_position = 6; // 6 digits have been entered
         }
         if(key == '*' && menu_state == 4){ 
           menu_state = 5;
-          digit_position = 0;
+          digit_position = 0; // 0 digits have been entered
           temp_ltm = (key_mem[0] - 48) * 100 + (key_mem[1] -48) * 10 + (key_mem[2] - 48) + (key_mem[3] - 48) * 0.1 + (key_mem[4] - 48) * 0.01;
           if(temp_ltm > 180){ 
             menu_state = 4;
           }
         }
         else if(menu_state == 4){ 
-          digit_position = 6; 
+          digit_position = 6;  // 6 digits have been entered
         }
       }
    already_print = false;
   }
-  //menu_state = 10: Start or stop "enter" mode
-  //menu_state = 0 : Latitude "enter value" mode
-  //menu_state = 1 : Longitude "enter value" mode
-  //menu_state = 2 : Latitude "enter direction" mode
-  //menu_state = 3 : Longitude "enter direction" mode
-  //menu_state = 4 : LTM "enter value" mode 
-  //menu_state = 5 : LTM "enter direction" mode
-  //menu_state = 6 : Time "enter" mode
-  //menu_state = 7 : Date "enter" mode
-  //menu_state = 8 : Start time "enter" mode
-  //menu_state = 9 : Finish time "enter" mode
-  //menu_state = 11 : NS or EW tracking
-  //This if block controls what the LCD will display
+  // menu_state = 10: Start or stop "enter" mode
+  // menu_state = 0 : Latitude "enter value" mode
+  // menu_state = 1 : Longitude "enter value" mode
+  // menu_state = 2 : Latitude "enter direction" mode
+  // menu_state = 3 : Longitude "enter direction" mode
+  // menu_state = 4 : LTM "enter value" mode 
+  // menu_state = 5 : LTM "enter direction" mode
+  // menu_state = 6 : Time "enter" mode
+  // menu_state = 7 : Date "enter" mode
+  // menu_state = 8 : Start time "enter" mode
+  // menu_state = 9 : Finish time "enter" mode
+  // menu_state = 11 : NS or EW tracking
   
+  // These if blocks control what the LCD will display
   if(menu_state == 10){ //True when in start or stop "enter" mode
     if(digit_position == 0 && already_print == false){
       lcd.clear(); 
@@ -1100,8 +1139,8 @@ void loop(){
      already_print = true;
    }
    
-   if(system_stopped == false){ 
-     RTCTime currentTime;
+   if(system_stopped == false){ // When system is in "menu enter" state and "system running" state  
+     RTCTime currentTime;   // Get the time
      RTC.getTime(currentTime);
      float current_hour = (float)currentTime.getHour();
      float current_minute = (float)currentTime.getMinutes();
@@ -1109,22 +1148,25 @@ void loop(){
      float H_current = ((12 - current_hour) + (0 - current_minute)/60.0) * 15;  //Calculate the current hour angle
   
      if(H_current <= H_Start && H_current > (H_Finish - 3.75)){
-       if(H_current <= H[current_position + 1] && (current_position + 1 < tracker_positions)){ 
+       if(H_current <= H[current_position + 1] && (current_position + 1 < tracker_positions)){ // If ready to change tracker position
+         lcd.setCursor(0, 0);
+         lcd.print("Changing...");
          set_Position(current_position + 1, current_hour, current_minute);
+         lcd.clear();
          current_position++;
        }
        if(once == true){ 
         once = false;
        }
      }
-     else if(H_current <= (H_Finish - 3.75)){ 
+     else if(H_current <= (H_Finish - 3.75)){  // If finish time is reached 
        if(once == false){
          increment_day = true;
        }
      }
    
    
-   if(increment_day == true && once == false){ 
+   if(increment_day == true && once == false){ // If ready to increment the day 
      Serial.println("Done_special");
      if(n + 1 == 366){ 
         n = 1;
@@ -1141,13 +1183,13 @@ void loop(){
      float H_Solar_Time; //Hour angle in Solar Time
      float E_min = 9.87*sin((PI/180.0)*2*(360.0/364.0)*(n - 81)) - 7.53*cos((PI/180.0)*(360.0/364.0)*(n - 81)) - 1.5*sin((PI/180.0)*(360.0/364.0)*(n - 81));
    
-     for(int x = 0; x < tracker_positions; x++){ 
+     for(int x = 0; x < tracker_positions; x++){ // Calculate azimuth and altitude angles
         H_Solar_Time = ((H[x]/15) + (4/60)*(ltm - longitude) - E_min/60) * 15;  //Convert from Civil Time to Solar Time and calculate the hour angle again
         beta[x] = (180.0/PI)*asin(cos((PI/180.0)*latitude)*cos((PI/180.0)*delta)*cos((PI/180.0)*H_Solar_Time) + sin((PI/180.0)*latitude)*sin((PI/180.0)*delta)); //Calculate altitude angles
         phi_s[x] = (180.0/PI)*asin((cos((PI/180.0)*delta)*sin((PI/180.0)*H_Solar_Time))/cos((PI/180.0)*beta[x])) ;  //Calculate azimuth angles of the sun;
         z = cos((PI/180.0)*H_Solar_Time);                                                 
         y = tan((PI/180.0)*delta)/tan((PI/180)*latitude);
-        if(y > z){                                       // Test if (tan_delta/tan_L) > cos_H
+        if(y > z){                                       
            if(phi_s[x] > 0){ 
              phi_s[x] = 180 - phi_s[x];
            }  
@@ -1156,10 +1198,10 @@ void loop(){
            }
        }
      }
-     if(tracking_type == 1){
+     if(tracking_type == 1){ // Calculate tilt angles for HNS tracking
        for(int x = 0; x < tracker_positions; x++){  
           cos_theta = sqrt(1 - (cos((PI/180.0)*beta[x])*cos((PI/180.0)*phi_s[x]))*(cos((PI/180.0)*beta[x])*cos((PI/180.0)*phi_s[x])));
-          if(!isnan(cos_theta) && (sin((PI/180.0)*beta[x]) <= cos_theta) && cos_theta != 0 && sin((PI/180.0)*beta[x]) >= 0){
+          if(!isnan(cos_theta) && (sin((PI/180.0)*beta[x]) <= cos_theta) && cos_theta != 0 && sin((PI/180.0)*beta[x]) >= 0){ // If tilt angle is valid
              tilt_angles[x] = (180.0/PI)*acos(sin((PI/180.0)*beta[x])/cos_theta);
              if(phi_s[x] > 0){ 
               tilt_angles[x] = -1 * tilt_angles[x];
@@ -1170,7 +1212,7 @@ void loop(){
           }
        }
      } 
-     if(tracking_type == 2){
+     if(tracking_type == 2){ // Calculate tilt anlgles for HEW tracking
        for(int x = 0; x < tracker_positions; x++){  
          cos_theta = sqrt(1 - (cos((PI/180.0)*beta[x])*sin((PI/180.0)*phi_s[x]))*(cos((PI/180.0)*beta[x])*sin((PI/180.0)*phi_s[x])));
          if(!isnan(cos_theta) && (sin((PI/180.0)*beta[x]) <= cos_theta) && cos_theta != 0 && sin((PI/180.0)*beta[x]) >= 0){
@@ -1190,7 +1232,7 @@ void loop(){
    }
   }
  }
-  if(value_update == true){ 
+  if(value_update == true){   // If new menu parameters have been entered
    system_stopped = false;
    latitude = temp_latitude;
    longitude = temp_longitude;
@@ -1284,13 +1326,14 @@ void loop(){
    float cos_theta;
    float H_Solar_Time; //Hour angle in Solar Time
    float E_min = 9.87*sin((PI/180.0)*2*(360.0/364.0)*(n - 81)) - 7.53*cos((PI/180.0)*(360.0/364.0)*(n - 81)) - 1.5*sin((PI/180.0)*(360.0/364.0)*(n - 81));
-   for(int x = 0; x < tracker_positions; x++){ 
-     H_Solar_Time = ((H[x]/15.0) + (4.0/60.0)*(ltm - longitude) - E_min/60.0) * 15;  //Convert from Civil Time to Solar Time and calculate the hour angle again
-     beta[x] = (180.0/PI)*asin(cos((PI/180.0)*latitude)*cos((PI/180.0)*delta)*cos((PI/180.0)*H_Solar_Time) + sin((PI/180.0)*latitude)*sin((PI/180.0)*delta)); //Calculate altitude angles
-     phi_s[x] = (180.0/PI)*asin((cos((PI/180.0)*delta)*sin((PI/180.0)*H_Solar_Time))/cos((PI/180.0)*beta[x])) ;  //Calculate azimuth angles of the sun;
+   
+   for(int x = 0; x < tracker_positions; x++){ // Calculate azimuth and altitude angles
+     H_Solar_Time = ((H[x]/15.0) + (4.0/60.0)*(ltm - longitude) - E_min/60.0) * 15;  
+     beta[x] = (180.0/PI)*asin(cos((PI/180.0)*latitude)*cos((PI/180.0)*delta)*cos((PI/180.0)*H_Solar_Time) + sin((PI/180.0)*latitude)*sin((PI/180.0)*delta)); 
+     phi_s[x] = (180.0/PI)*asin((cos((PI/180.0)*delta)*sin((PI/180.0)*H_Solar_Time))/cos((PI/180.0)*beta[x])); 
      z = cos((PI/180.0)*H_Solar_Time);                                                 
      y = tan((PI/180.0)*delta)/tan((PI/180.0)*latitude);
-     if(y > z){                                       // Test if (tan_delta/tan_L) > cos_H
+     if(y > z){                                       
        if(phi_s[x] > 0){ 
          phi_s[x] = 180 - phi_s[x];
        }
@@ -1300,7 +1343,7 @@ void loop(){
      }
   }
  
- if(tracking_type == 1){
+ if(tracking_type == 1){ // Calculate tilt angles for HNS tracking
     for(int x = 0; x < tracker_positions; x++){  
        cos_theta = sqrt(1 - (cos((PI/180.0)*beta[x])*cos((PI/180)*phi_s[x]))*(cos((PI/180.0)*beta[x])*cos((PI/180.0)*phi_s[x])));
        if(!isnan(cos_theta) && (sin((PI/180.0)*beta[x]) <= cos_theta) && cos_theta != 0 && sin((PI/180.0)*beta[x]) >= 0){
@@ -1314,10 +1357,10 @@ void loop(){
        }
      }
   } 
- if(tracking_type == 2){
+ if(tracking_type == 2){ // Calculate tilt angles for HEW tracking
     for(int x = 0; x < tracker_positions; x++){  
        cos_theta = sqrt(1 - (cos((PI/180.0)*beta[x])*sin((PI/180.0)*phi_s[x]))*(cos((PI/180.0)*beta[x])*sin((PI/180.0)*phi_s[x])));
-       if(!isnan(cos_theta) && (sin((PI/180.0)*beta[x]) <= cos_theta) && cos_theta != 0 && sin((PI/180.0)*beta[x]) >= 0){
+       if(!isnan(cos_theta) && (sin((PI/180.0)*beta[x]) <= cos_theta) && cos_theta != 0 && sin((PI/180.0)*beta[x]) >= 0){  // If tilt angle is valid
           tilt_angles[x] = (180.0/PI)*acos(sin((PI/180)*beta[x])/cos_theta);
           if(phi_s[x] > 90 ||  phi_s[x] < -90){ 
               tilt_angles[x] = -1 * tilt_angles[x];
@@ -1331,53 +1374,71 @@ void loop(){
    for(int x = 0; x < tracker_positions; x++){ 
     Serial.print("Position:");
     Serial.println(x);
-    Serial.print("Beta:");
+    float h_float = (12.0 - (H[x]/15.0));
+    int h_civil = (int)h_float;
+    float m_civil = h_float - (float)h_civil;
+    m_civil = m_civil * 60;
+    Serial.print("Civil Time: "); 
+    if(h_civil < 10){ 
+      Serial.print("0");
+    }
+    Serial.print(h_civil);
+    Serial.print(":");
+    if(m_civil < 10){ 
+      Serial.print("0");
+    }
+    Serial.println((int)m_civil);
+    Serial.print("Beta: ");
     Serial.println(beta[x]);
-    Serial.print("Phi:");
+    Serial.print("Phi_s: ");
     Serial.println(phi_s[x]);
-    Serial.print("H:");
-    Serial.println(H[x]);
     Serial.print("Tilt:");
     Serial.println(tilt_angles[x]);
     Serial.println();
-    }
     
+   } 
     
     float H_current = ((12 - hour) + (0 - minute)/60) * 15;  //Calculate the current hour angle
     boolean motorset = false;
   
-    if(H_current <= H_Start && H_current > (H_Finish - 3.75)){
-      for(int x = 0; x < tracker_positions; x++){ 
+    if(H_current <= H_Start && H_current > (H_Finish - 3.75)){ // If current time is between daily start and finish time
+      for(int x = 0; x < tracker_positions; x++){ // Find the optimal start position
         if(H_current >= H[x] && motorset == false){ 
-           Serial.println("ONCE");
-           Serial.println(hour);
-           Serial.println(minute);
            if(H_current == H[x]){
+             lcd.setCursor(0, 0);
+             lcd.print("Changing...");
              set_Position(x, hour, minute);      //Set tracker position
+             lcd.clear();
              current_position = x; //Store/track the current position
            }
            else{
+             lcd.setCursor(0, 0);
+             lcd.print("Changing...");
              set_Position(x - 1, hour, minute);      //Set tracker position
+             lcd.clear();
              current_position = x - 1; //Store/track the current position
            }   
            motorset = true;          //Set it only once
         }
      }
      if(motorset == false && H_current > H_Finish - 3.75){ 
-           Serial.println("ONCE2");
-           Serial.println(hour);
-           Serial.println(minute);
+           lcd.setCursor(0, 0);
+           lcd.print("Changing...");
            set_Position(tracker_positions - 1, hour, minute);       //Set tracker position
-           current_position = tracker_positions - 1;  //Store/track the current position
+           lcd.clear();
+           current_position = tracker_positions - 1;  //Store/track the current position               
      }
     }
     else if(H_current <= (H_Finish - 3.75)){ 
       increment_day = true;
     }
+    else if(H_current > H_Start){ 
+      current_position = -1; 
+    }
     value_update = false;
   }
   
-  if(system_stopped == false){ 
+  if(system_stopped == false){ // While in "system running" state
    RTCTime currentTime;
    RTC.getTime(currentTime);
    float current_hour = (float)currentTime.getHour();
@@ -1386,25 +1447,35 @@ void loop(){
    float H_current = ((12 - current_hour) + (0 - current_minute)/60.0) * 15;  //Calculate the current hour angle
   
    if(H_current <= H_Start && H_current > (H_Finish - 3.75)){
-     if(H_current <= H[current_position + 1] && (current_position + 1 < tracker_positions)){ 
+     if(H_current <= H[current_position + 1] && (current_position + 1 < tracker_positions)){ // If ready to change to next position
+        lcd.setCursor(0, 0);
+        lcd.print("Changing...");
         set_Position(current_position + 1, current_hour, current_minute);
+        lcd.clear();
         current_position++;
      }
      if(once == true){ 
         once = false;
      }
    }
-   else if(H_current <= (H_Finish - 3.75)){ 
+   else if(H_current <= (H_Finish - 3.75)){  // If finish time is reached 
      if(once == false){
         increment_day = true;
      }
    }
-   if(lcd_update == true){
+   if(lcd_update == true){ // If LCD interrupt is triggered 
      
-     PV_voltage = (analogRead(A0) * (5.0/1023.0)) * (27.0/5.0);
+     PV_voltage = (analogRead(A0) * (5.0/1023.0)) * (27.0/5.0);  // Measure and calculate PV power
      PV_voltage = 1.04*PV_voltage - 1.1788;
-     PV_current = (analogRead(A1) * (5.0/1023.0) - 2.5)/0.066;
+     PV_current = 14.63*(analogRead(A1) * (5.0/1023.0)) - 38.6232;
      PV_power = PV_voltage * PV_current;
+     Serial.print("PV voltage: ");
+     Serial.println(PV_voltage);
+     Serial.print("PV current: ");
+     Serial.println(PV_current);
+     Serial.print("PV power: ");
+     Serial.println(PV_power);
+     
      int temp_PV_power = (int)PV_power;
      char lcd_power[5];
      lcd_power[0] = (temp_PV_power / 100 ) % 10 + 48; 
@@ -1418,12 +1489,17 @@ void loop(){
      
      lcd.setCursor(0, 0);
      lcd.print("PV Power:");
-     lcd.print(lcd_power[0]);
-     lcd.print(lcd_power[1]);
-     lcd.print(lcd_power[2]);
-     lcd.print(".");
-     lcd.print(lcd_power[3]);
-     lcd.print(lcd_power[4]);
+     if(PV_power <= 0.1){ 
+       lcd.print("000.00");
+     }
+     else { 
+       lcd.print(lcd_power[0]);
+       lcd.print(lcd_power[1]);
+       lcd.print(lcd_power[2]);
+       lcd.print(".");
+       lcd.print(lcd_power[3]);
+       lcd.print(lcd_power[4]);
+     }
      lcd.setCursor(0, 1);
      lcd.print("Time:");
      char lcd_time[4];
@@ -1440,17 +1516,15 @@ void loop(){
      lcd_update = false;
    }
    
-   
-   
-   if(increment_day == true && once == false){ 
-     Serial.println("Done");
+   if(increment_day == true && once == false){ // If day needs to be incremented
+     Serial.println("Increment day");
      if(n + 1 == 366){ 
         n = 1;
      }
      else{
         n = n + 1;
      }
-     float delta = 23.45 * sin((PI/180)*((360/365) * (n - 81))) ;
+     float delta = 23.45 * sin((PI/180)*((360/365) * (n - 81)));
      float beta[96];  //Altitude angles per day
      float phi_s[96]; //Sun azimuth angles per day
      float z;
@@ -1459,13 +1533,13 @@ void loop(){
      float H_Solar_Time; //Hour angle in Solar Time
      float E_min = 9.87*sin((PI/180)*2*(360/364)*(n - 81)) - 7.53*cos((PI/180)*(360/364)*(n - 81)) - 1.5*sin((PI/180)*(360/364)*(n - 81));
    
-     for(int x = 0; x < tracker_positions; x++){ 
+     for(int x = 0; x < tracker_positions; x++){ // Calculate azimuth and altitude angles
         H_Solar_Time = ((H[x]/15) + (4/60)*(ltm - longitude) - E_min/60) * 15;  //Convert from Civil Time to Solar Time and calculate the hour angle again
         beta[x] = (180.0/PI)*asin(cos((PI/180.0)*latitude)*cos((PI/180.0)*delta)*cos((PI/180.0)*H_Solar_Time) + sin((PI/180.0)*latitude)*sin((PI/180.0)*delta)); //Calculate altitude angles
         phi_s[x] = (180.0/PI)*asin((cos((PI/180.0)*delta)*sin((PI/180.0)*H_Solar_Time))/cos((PI/180.0)*beta[x])) ;  //Calculate azimuth angles of the sun;
         z = cos((PI/180.0)*H_Solar_Time);                                                 
         y = tan((PI/180.0)*delta)/tan((PI/180.0)*latitude);
-        if(y > z){                                       // Test if (tan_delta/tan_L) > cos_H
+        if(y > z){                                       
            if(phi_s[x] > 0){ 
              phi_s[x] = 180 - phi_s[x];
            }  
@@ -1475,7 +1549,7 @@ void loop(){
        }
      }
  
-    if(tracking_type == 1){
+    if(tracking_type == 1){ // Calculate tilt angles for HNS tracking
        for(int x = 0; x < tracker_positions; x++){  
           cos_theta = sqrt(1 - (cos((PI/180.0)*beta[x])*cos((PI/180.0)*phi_s[x]))*(cos((PI/180.0)*beta[x])*cos((PI/180.0)*phi_s[x])));
           if(!isnan(cos_theta) && (sin((PI/180.0)*beta[x]) <= cos_theta) && cos_theta != 0 && sin((PI/180.0)*beta[x]) >= 0){
@@ -1489,7 +1563,7 @@ void loop(){
           }
        }
     } 
-    if(tracking_type == 2){
+    if(tracking_type == 2){ // Calculate tilt angles for HEW tracking
       for(int x = 0; x < tracker_positions; x++){  
          cos_theta = sqrt(1 - (cos((PI/180.0)*beta[x])*sin((PI/180.0)*phi_s[x]))*(cos((PI/180.0)*beta[x])*sin((PI/180.0)*phi_s[x])));
          if(!isnan(cos_theta) && (sin((PI/180.0)*beta[x]) <= cos_theta) && cos_theta != 0 && sin((PI/180.0)*beta[x]) >= 0){
@@ -1508,7 +1582,7 @@ void loop(){
      once = true;
    }
  }
-  if(print_on_lcd == true){ 
+  if(print_on_lcd == true){ // Display "SYSTEM STOPPED"
        lcd.clear();
      if(system_stopped == true){
        lcd.setCursor(0, 0);
@@ -1519,8 +1593,8 @@ void loop(){
  
  }
 
-char Get_Key(){ 
-   if(digitalRead(D8) == LOW){ //Determine which column is pressed
+char Get_Key(){ // Find keypad character pressed
+   if(digitalRead(D8) == LOW){ // Determine which column is pressed
       column = 1; 
    }
    else if(digitalRead(D7) == LOW){ 
@@ -1530,7 +1604,7 @@ char Get_Key(){
       column = 3;
    }
    
-   if(column == 1){           //Determine which row is pressed when 1st column pressed
+   if(column == 1){           // Determine which row is pressed when 1st column pressed
     digitalWrite(D12, HIGH);
     if(digitalRead(D8) == HIGH){ 
      key = '1';
@@ -1608,59 +1682,73 @@ char Get_Key(){
    }
 }
 
-void set_Position(int pos, float h, float m){ 
-  Serial.println("POSITION CHANGE:");
-  Serial.print("Day:"); 
+void set_Position(int pos, float h, float m){ // Set actuator position to desired tilt angle
+  Serial.println("POSITION CHANGE: ");
+  Serial.print("Day: "); 
   Serial.println(n); 
-  Serial.print("Position:"); 
+  Serial.print("Position: "); 
   Serial.println(pos); 
-  Serial.print("Time:");
+  Serial.print("Civil Time: ");
+  if(h < 10){ 
+    Serial.print("0");
+  }
   Serial.print((int)h);
   Serial.print(":");
+  if(m < 10){ 
+    Serial.print("0");
+  }
   Serial.println((int)m);
-  Serial.print("Tilt:");
+  Serial.print("Desired tilt: ");
   Serial.println(tilt_angles[pos]);
-  Serial.print("Hours before solar noon:"); 
-  Serial.println(H[pos]/15);
 
   battery_voltage = (analogRead(A3) * (5.0 / 1023.0)) * (27.0 / 5.0);
-  battery_voltage = 1.197 * battery_voltage - 1.219;
+  battery_voltage = 1.21 * battery_voltage - 1.93;
   Serial.print("Battery voltage:"); 
   Serial.println(battery_voltage);
- /* float buck_duty_cycle = (12.0 / battery_voltage) * 100; 
-  pwm1.pulse_perc(buck_duty_cycle); 
-  pwm2.pulse_perc(50);
-  
+  float buck_duty_cycle = (int)((12.0 / battery_voltage) * 100); 
+  if(buck_duty_cycle > 100){ 
+     buck_duty_cycle = 100;
+  }
   if(tilt_angles[pos] <= tilt_limit && tilt_angles[pos] >= -tilt_limit){
     module_reposition = true;
+    pwm1.pulse_perc(buck_duty_cycle);
+    pwm2.pulse_perc(50);
   } 
+  else{ 
+    Serial.println("INVALID POSITION");
+  }
   
-  while(module_reposition == true){*/
+  while(module_reposition == true){
     int sensor_value = analogRead(A2);
     float tilt_voltage = sensor_value * (5.0 / 1023.0);
-    if(tilt_voltage < 0.74){
-      measured_tilt = 117.65*tilt_voltage - 157.06;
-    }
-    else if((tilt_voltage < 1.09) && (tilt_voltage >= 0.74)){
-      measured_tilt = 57.14*tilt_voltage - 112.28;
-    }
-    else if((tilt_voltage < 4.31) && (tilt_voltage >= 1.09)){
-      measured_tilt = 31.06*tilt_voltage - 83.86;
-    }
-    else if((tilt_voltage < 4.67) && (tilt_voltage >= 4.31)){
-      measured_tilt = 55.55*tilt_voltage - 189.42;
-    }
-    else if(tilt_voltage >= 4.67){ 
-      measured_tilt = 153.85*tilt_voltage - 648.48; 
-    }
+      if(tilt_voltage < 0.67){
+      measured_tilt = 125*tilt_voltage - 153.75;
+      }
+      else if((tilt_voltage < 1.04) && (tilt_voltage >= 0.67)){
+      measured_tilt = 54.05*tilt_voltage - 106.21;
+      }
+      else if((tilt_voltage < 4.21) && (tilt_voltage >= 1.04)){
+      measured_tilt = 31.55*tilt_voltage - 82.81;
+      }
+      else if((tilt_voltage < 4.59) && (tilt_voltage >= 4.21 )){
+      measured_tilt = 52.63*tilt_voltage - 171.57;
+      }
+       else if(tilt_voltage >= 4.59){ 
+      measured_tilt = 153.85*tilt_voltage - 641.56; 
+      }
       measured_tilt = round(measured_tilt);
-      Serial.print("Measured tilt:"); 
-      Serial.println(measured_tilt); 
-      Serial.println();
-    /*if((measured_tilt <= tilt_angles[pos] + half_deadband) && (measured_tilt >= tilt_angles[pos] - half_deadband)){ 
-       pwm2.pulse_perc(0);
-       pwm1.pulse_perc(0);
-       module_reposition = false;
+
+    // Switch with deadband controller implementation
+    if((measured_tilt <= tilt_angles[pos] + half_deadband) && (measured_tilt >= tilt_angles[pos] - half_deadband)){ 
+       if(stop_check == 200){
+         pwm2.pulse_perc(0);
+         pwm1.pulse_perc(0);
+         module_reposition = false;
+         stop_check = 0;
+       }    
+       else{ 
+        stop_check = stop_check + 1;
+       }
     }
     else if(measured_tilt < tilt_angles[pos] - half_deadband){ 
        digitalWrite(D4, LOW);
@@ -1668,68 +1756,88 @@ void set_Position(int pos, float h, float m){
     else if(measured_tilt > tilt_angles[pos] + half_deadband){ 
        digitalWrite(D4, HIGH);
     }
-  }*/
+  }
+  Serial.print("Measured tilt: "); 
+  Serial.println(measured_tilt); 
+  Serial.println();
 }
 
-void actuator_return(){ 
-    /*battery_voltage = (analogRead(A3) * (5.0 / 1023.0)) * (27.0 / 5.0);
+void actuator_return(){           // Return actuator to "SYSTEM STOPPED" position
+    Serial.println("ACTUATOR RETURN");
+    battery_voltage = (analogRead(A3) * (5.0 / 1023.0)) * (27.0 / 5.0);
     battery_voltage = 1.197 * battery_voltage - 1.219;
-    float buck_duty_cycle = (12.0 / battery_voltage) * 100; 
-    pwm1.pulse_perc(buck_duty_cycle); 
+    float buck_duty_cycle = (int)(12.0 / battery_voltage) * 100; 
+    if(buck_duty_cycle > 100){ 
+      buck_duty_cycle = 100;
+    }
+    pwm1.pulse_perc(buck_duty_cycle);
     pwm2.pulse_perc(50);
  
     module_reposition = true;
-  
     while(module_reposition == true){
        int sensor_value = analogRead(A2);
        float tilt_voltage = sensor_value * (5.0 / 1023.0);
        
-       if(tilt_voltage < 0.74){
-          measured_tilt = 117.65*tilt_voltage - 157.06;
+       if(tilt_voltage < 0.67){
+        measured_tilt = 125*tilt_voltage - 153.75;
        }
-       else if((tilt_voltage < 1.09) && (tilt_voltage >= 0.74)){
-          measured_tilt = 57.14*tilt_voltage - 112.28;
+       else if((tilt_voltage < 1.04) && (tilt_voltage >= 0.67)){
+        measured_tilt = 54.05*tilt_voltage - 106.21;
        }
-       else if((tilt_voltage < 4.31) && (tilt_voltage >= 1.09)){
-         measured_tilt = 31.06*tilt_voltage - 83.86;
+       else if((tilt_voltage < 4.21) && (tilt_voltage >= 1.04)){
+         measured_tilt = 31.55*tilt_voltage - 82.81;
        }
-       else if((tilt_voltage < 4.67) && (tilt_voltage >= 4.31)){
-         measured_tilt = 55.55*tilt_voltage - 189.42;
+       else if((tilt_voltage < 4.59) && (tilt_voltage >= 4.21 )){
+         measured_tilt = 52.63*tilt_voltage - 171.57;
        }
-       else if(tilt_voltage >= 4.67){ 
-         measured_tilt = 153.85*tilt_voltage - 648.48; 
+       else if(tilt_voltage >= 4.59){ 
+         measured_tilt = 153.85*tilt_voltage - 641.56; 
        }
        measured_tilt = round(measured_tilt);
 
+       // Switch with deadband controller implementation
        if((measured_tilt <= -tilt_limit + half_deadband) && (measured_tilt >= -tilt_limit - half_deadband)){ 
-         pwm2.pulse_perc(0);
-         pwm1.pulse_perc(0);
-         module_reposition = false;
+         if(stop_check == 200){
+           pwm2.pulse_perc(0);
+           pwm1.pulse_perc(0);
+           module_reposition = false;
+           stop_check = 0;
+         }else{ 
+           stop_check = stop_check + 1;
+         }
        }
        else if(measured_tilt < -tilt_limit - half_deadband){ 
          digitalWrite(D4, LOW);
        }
        else if(measured_tilt > -tilt_limit + half_deadband){ 
-       digitalWrite(D4, HIGH);
+         digitalWrite(D4, HIGH);
        }
-   }*/
-}
-
-void blink(){   
-   if(button_flag == false){
-     button_flag = true;   //Set flag when button is pressed
-     menu_state = 10;      // Set menu state
-   }
-   else{
-       button_flag = false;
-       menu_state = 12;
-       print_on_lcd = true;
-       digit_position = 0;
-       already_print = false;
    }
 }
 
-void rtc_interrupt() {
-  //Serial.println("PERIODIC INTERRUPT");
+void blink(){   // Push-button interrupt handler
+   if(button_pressed == 0){ 
+      button_pressed_time = millis();  // Push-button de-bounce
+   }
+   else if(millis() - button_pressed_time > 2){
+      if(digitalRead(D2) == LOW){
+        if(button_flag == false){
+           button_flag = true;   //Set flag when button is pressed
+           menu_state = 10;      // Set menu state
+        }
+        else{
+           button_flag = false;
+           menu_state = 12;
+           print_on_lcd = true;
+           digit_position = 0;
+           already_print = false;
+        }
+       button_pressed_time = millis();
+       button_pressed = 0;
+      }
+  }
+}
+
+void rtc_interrupt() {   // LCD update interrupt handler
   lcd_update = true;
 }
